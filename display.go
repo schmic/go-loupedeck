@@ -3,48 +3,31 @@ package loupedeck
 import (
 	"encoding/binary"
 	"image"
+	"image/color"
+	"image/draw"
 	"log/slog"
+
 	"maze.io/x/pixel/pixelcolor"
-	// "time"
 )
 
-// Display is part of the Loupedeck protocol, used to identify
-// which of the displays on the Loupedeck to write to.
 type Display struct {
-	loupedeck        *Loupedeck
-	id               byte
-	width, height    int
-	offsetx, offsety int // used for mapping legacy left/center/right screens onto unified devices.
-	Name             string
-	bigEndian        bool
+	device    *Device
+	id        byte
+	width     int
+	height    int
+	offsetx   int // used for mapping legacy left/center/right screens onto unified devices.
+	offsety   int // used for mapping legacy left/center/right screens onto unified devices.
+	Name      string
+	bigEndian bool
 }
 
-// GetDisplay returns a Display object with a given name if it exists,
-// otherwise it returns nil.
-//
-// Traditional Loupedeck devices had 3 displays, Left, Center, and
-// Right.  Newer devices make all 3 look like a single display, and
-// it's impossible to know at compile-time what any given device will
-// support, so we need to create them dynamically and then look them
-// up.
-//
-// In addition, some devices (like the Loupedeck CT) have additional
-// displays.
-//
-// For now, common display names are:
-//
-//   - left (on all devices, emulated on newer hardware)
-//   - right (on all devices, emulated on newer hardware)
-//   - main (on all devices, emulated on newer hardware)
-//   - dial (Loupedeck CT only)
-//   - main (only on newer hardware)
-func (l *Loupedeck) GetDisplay(name string) *Display {
-	return l.displays[name]
+func (d *Device) GetDisplay(name string) *Display {
+	return d.displays[name]
 }
 
-func (l *Loupedeck) addDisplay(name string, id byte, width, height, offsetx, offsety int, bigEndian bool) {
-	d := &Display{
-		loupedeck: l,
+func (d *Device) addDisplay(name string, id byte, width, height, offsetx, offsety int, bigEndian bool) {
+	d.displays[name] = &Display{
+		device:    d,
 		Name:      name,
 		id:        id,
 		width:     width,
@@ -53,63 +36,48 @@ func (l *Loupedeck) addDisplay(name string, id byte, width, height, offsetx, off
 		offsety:   offsety,
 		bigEndian: bigEndian,
 	}
-	l.displays[name] = d
 }
 
-// SetDisplays configures the Loupdeck's displays based on the
-// hardware ID of the conencted device.
-func (l *Loupedeck) SetDisplays() {
-	switch l.Product {
+func (d *Device) SetDisplays() {
+	switch d.Product {
 	case "0003":
 		slog.Info("Using Loupedeck CT v1 display settings.")
-		l.addDisplay("left", 'L', 60, 270, 0, 0, false)
-		l.addDisplay("main", 'A', 360, 270, 60, 0, false)
-		l.addDisplay("right", 'R', 60, 270, 420, 0, false)
-		l.addDisplay("dial", 'W', 240, 240, 0, 0, true)
+		d.addDisplay("left", 'L', 60, 270, 0, 0, false)
+		d.addDisplay("main", 'A', 360, 270, 60, 0, false)
+		d.addDisplay("right", 'R', 60, 270, 420, 0, false)
+		d.addDisplay("dial", 'W', 240, 240, 0, 0, true)
 	case "0007":
 		slog.Info("Using Loupedeck CT v2 display settings.")
-		l.addDisplay("left", 'M', 60, 270, 0, 0, false)
-		l.addDisplay("main", 'M', 360, 270, 60, 0, false)
-		l.addDisplay("right", 'M', 60, 270, 420, 0, false)
-		l.addDisplay("all", 'M', 480, 270, 0, 0, false) // Same as left+main+right
-		l.addDisplay("dial", 'W', 240, 240, 0, 0, true)
+		d.addDisplay("left", 'M', 60, 270, 0, 0, false)
+		d.addDisplay("main", 'M', 360, 270, 60, 0, false)
+		d.addDisplay("right", 'M', 60, 270, 420, 0, false)
+		d.addDisplay("all", 'M', 480, 270, 0, 0, false)
+		d.addDisplay("dial", 'W', 240, 240, 0, 0, true)
 	case "0004":
 		slog.Info("Using Loupedeck Live display settings.")
-		l.addDisplay("left", 'L', 60, 270, 0, 0, false)
-		l.addDisplay("main", 'A', 360, 270, 0, 0, false)
-		l.addDisplay("right", 'R', 60, 270, 0, 0, false)
+		d.addDisplay("left", 'M', 60, 270, 0, 0, false)
+		d.addDisplay("main", 'M', 360, 270, 60, 0, false)
+		d.addDisplay("right", 'M', 60, 270, 420, 0, false)
+		d.addDisplay("all", 'M', 480, 270, 0, 0, false)
 	case "0006", "0d06":
 		slog.Info("Using Loupedeck Live S/Razor Stream Controller display settings.")
-		l.addDisplay("left", 'M', 60, 270, 0, 0, false)
-		l.addDisplay("main", 'M', 360, 270, 60, 0, false)
-		l.addDisplay("right", 'M', 60, 270, 420, 0, false)
-		l.addDisplay("all", 'M', 480, 270, 0, 0, false) // Same as left+main+right
+		d.addDisplay("left", 'M', 60, 270, 0, 0, false)
+		d.addDisplay("main", 'M', 360, 270, 60, 0, false)
+		d.addDisplay("right", 'M', 60, 270, 420, 0, false)
+		d.addDisplay("all", 'M', 480, 270, 0, 0, false)
 	default:
-		panic("Unknown device type: " + l.Product)
+		panic("Unknown device type: " + d.Product)
 	}
 }
 
-// Height returns the height (in pixels) of the Loupedeck's displays.
 func (d *Display) Height() int {
 	return d.height
 }
 
-// Width returns the width (in pixels) of the Loupedeck's displays.
 func (d *Display) Width() int {
 	return d.width
 }
 
-// Draw draws an image onto a specific display of the
-// Loupedeck Live.  The device has 3 seperate displays, the left
-// segment (by knobs 1-3), the right segment (by knobs 4-6) and the
-// main/center segment (underneath the 4x3 array of touch buttons).
-// Drawing subsets of a display is explicitly allowed; writing a 90x90
-// block of pixels to the main display will only overwrite one
-// button's worth of image, and will not touch other pixels.
-//
-// Most Loupedeck screens are little-endian, except for the knob
-// screen on the Loupedeck CT, which is big-endian.  This does not
-// deal with this case correctly yet.
 func (d *Display) Draw(im image.Image, xoff, yoff int) {
 	slog.Info("Draw called", "Display", d.Name, "xoff", xoff, "yoff", yoff, "width", im.Bounds().Dx(), "height", im.Bounds().Dy())
 
@@ -146,8 +114,8 @@ func (d *Display) Draw(im image.Image, xoff, yoff int) {
 		}
 	}
 
-	m := d.loupedeck.NewMessage(WriteFramebuff, data)
-	err := d.loupedeck.Send(m)
+	m := d.device.NewMessage(WriteFramebuff, data)
+	err := d.device.Send(m)
 	if err != nil {
 		slog.Warn("Send failed", "err", err)
 	}
@@ -167,10 +135,23 @@ func (d *Display) Draw(im image.Image, xoff, yoff int) {
 	//
 	// Ideally, we'd batch these and only call Draw when we're
 	// doing with multiple FB updates.
-	data2 := make([]byte, 2)
-	binary.BigEndian.PutUint16(data2[0:], uint16(d.id))
-	m2 := d.loupedeck.NewMessage(Draw, data2)
-	err = d.loupedeck.Send(m2)
+
+	d.Refresh()
+}
+
+func (d *Display) Clear() {
+	dw := d.width
+	dh := d.height
+	im := image.NewRGBA(image.Rect(0, 0, dw, dh))
+	draw.Draw(im, im.Bounds(), &image.Uniform{&color.Black}, image.ZP, draw.Src)
+	d.Draw(im, 0, 0)
+}
+
+func (d *Display) Refresh() {
+	data := make([]byte, 2)
+	binary.BigEndian.PutUint16(data[0:], uint16(d.id))
+	msg := d.device.NewMessage(Draw, data)
+	err := d.device.Send(msg)
 	if err != nil {
 		slog.Warn("Send failed", "err", err)
 	}

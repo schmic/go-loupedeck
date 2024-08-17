@@ -2,13 +2,15 @@ package loupedeck
 
 import (
 	"fmt"
-	"github.com/gorilla/websocket"
 	"log/slog"
+	"math"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 // MessageType is a uint16 used to identify various commands and
-// actions needed for the Loupedeck protocol.
+// actions needed for the Loupedeck protocod.
 type MessageType byte
 
 // See 'COMMANDS' in https://github.com/foxxyz/loupedeck/blob/master/constants.js
@@ -34,12 +36,9 @@ const (
 // over USB.  All communication with the Loupedeck occurs via
 // Messages, but most application software can use higher-level
 // functions in this library and never touch messages directly.
-//
-// The exception would be wanting to use a feature like vibration that
-// isn't currently supported in this library.
 type Message struct {
-	transactionID byte
 	messageType   MessageType
+	transactionID byte
 	length        byte
 	data          []byte
 }
@@ -47,14 +46,12 @@ type Message struct {
 // NewMessage creates a new low-level Loupedeck message with
 // a specified type and data.  This isn't generally needed for
 // end-use.
-func (l *Loupedeck) NewMessage(messageType MessageType, data []byte) *Message {
-	length := len(data) + 3
-	if length > 255 {
-		length = 255
-	}
+func (d *Device) NewMessage(messageType MessageType, data []byte) *Message {
+	dataLen := float64(len(data))
+	length := math.Min(dataLen+3, 255)
 
 	m := Message{
-		transactionID: l.newTransactionID(),
+		transactionID: d.newTransactionID(),
 		messageType:   messageType,
 		length:        byte(length),
 		data:          data,
@@ -66,7 +63,7 @@ func (l *Loupedeck) NewMessage(messageType MessageType, data []byte) *Message {
 // ParseMessage creates a Loupedeck Message from a block of
 // bytes.  This is used to decode incoming messages from a Loupedeck,
 // and shouldn't generally be needed outside of this library.
-func (l *Loupedeck) ParseMessage(b []byte) (*Message, error) {
+func (d *Device) ParseMessage(b []byte) (*Message, error) {
 	m := Message{
 		length:        b[0],
 		messageType:   MessageType(b[1]),
@@ -103,50 +100,44 @@ func (m *Message) String() string {
 // number.  This is used as part of the Loupedeck protocol and used to
 // match results with specific queries.  The transaction ID
 // incrememnts per call and rolls over back to 1 (not 0).
-func (l *Loupedeck) newTransactionID() uint8 {
-	l.transactionMutex.Lock()
-	t := l.transactionID
+func (d *Device) newTransactionID() uint8 {
+	d.transactionMutex.Lock()
+	t := d.transactionID
 	t++
 	if t == 0 {
 		t = 1
 	}
-	l.transactionID = t
-	l.transactionMutex.Unlock()
+	d.transactionID = t
+	d.transactionMutex.Unlock()
 
 	return t
 }
 
 // Send sends a message to the specified device.
-func (l *Loupedeck) Send(m *Message) error {
-	slog.Info("Sending", "message", m.String())
-	l.transactionCallbacks[m.transactionID] = nil
+func (d *Device) Send(m *Message) error {
+	// slog.Info("Sending", "message", m.String())
+	d.transactionCallbacks[m.transactionID] = nil
 
-	return l.send(m)
-}
-
-// send sends a message to the specified device.
-func (l *Loupedeck) send(m *Message) error {
-	b := m.asBytes()
-	return l.conn.WriteMessage(websocket.BinaryMessage, b)
+	return d.send(m)
 }
 
 // SendWithCallback sends a message to the specified device
 // and registers a callback.  When (or if) the Loupedeck sends a
 // response to the message, the callback function will be called and
 // provided with the response message.
-func (l *Loupedeck) SendWithCallback(m *Message, c transactionCallback) error {
+func (d *Device) SendWithCallback(m *Message, c transactionCallback) error {
 	slog.Info("Setting callback", "message", m.String())
-	l.transactionCallbacks[m.transactionID] = c
+	d.transactionCallbacks[m.transactionID] = c
 
-	return l.send(m)
+	return d.send(m)
 }
 
 // SendAndWait sends a message and then waits for a response, returning the response message.
-func (l *Loupedeck) SendAndWait(m *Message, timeout time.Duration) (*Message, error) {
+func (d *Device) SendAndWait(m *Message, timeout time.Duration) (*Message, error) {
 	ch := make(chan *Message)
 	defer close(ch)
 	// TODO(scottlaird): actually implement the timeout.
-	err := l.SendWithCallback(m, func(m2 *Message) {
+	err := d.SendWithCallback(m, func(m2 *Message) {
 		defer func() {
 			_ = recover()
 		}()
@@ -154,7 +145,7 @@ func (l *Loupedeck) SendAndWait(m *Message, timeout time.Duration) (*Message, er
 		ch <- m2
 	})
 	if err != nil {
-		return nil, fmt.Errorf("Unable to send: %v", err)
+		return nil, fmt.Errorf("unable to send: %v", err)
 	}
 
 	// Trying SendAndWait with Draw() usually fails, because it
@@ -165,7 +156,7 @@ func (l *Loupedeck) SendAndWait(m *Message, timeout time.Duration) (*Message, er
 	// loose.
 
 	//	slog.Info("Sending ping.")
-	//	err = l.conn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(time.Second))
+	//	err = d.conn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(time.Second))
 	//	slog.Info("Ping send", "err", err)
 
 	select {
@@ -174,6 +165,12 @@ func (l *Loupedeck) SendAndWait(m *Message, timeout time.Duration) (*Message, er
 		return resp, nil
 	case <-time.After(timeout):
 		slog.Warn("sendAndWait timeout")
-		return nil, fmt.Errorf("Timeout waiting for response")
+		return nil, fmt.Errorf("timeout waiting for response")
 	}
+}
+
+// send sends a message to the specified device.
+func (d *Device) send(m *Message) error {
+	b := m.asBytes()
+	return d.conn.WriteMessage(websocket.BinaryMessage, b)
 }
